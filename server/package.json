@@ -1,0 +1,17 @@
+{
+  "name": "meeting-notes-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Google Meet の字幕を受け取り、Claude Code (claude -p) で定期要約・議事録・提案スライドを作るローカルサーバー",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "pptxgenjs": "4.0.1"
+  }
+}

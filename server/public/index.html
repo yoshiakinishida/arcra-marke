@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>商談メモ</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --text: #1d2430; --sub: #667085; --line: #e3e6eb;
+    --accent: #2e6fd8; --warn: #b54708; --warn-bg: #fff4e5; --ok: #157f3c; --err: #b42318;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #15181d; --card: #1e2229; --text: #e6e8eb; --sub: #98a2b3; --line: #2f3540;
+      --accent: #6aa0ff; --warn: #f5b25b; --warn-bg: #3a2a12; --ok: #4ccf7d; --err: #ff8a80; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  header { position: sticky; top: 0; z-index: 2; background: var(--card); border-bottom: 1px solid var(--line); padding: 10px 14px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  header h1 { font-size: 15px; margin: 0 8px 0 0; }
+  select, input, textarea, button { font: inherit; color: inherit; }
+  select, input, textarea { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+  select { max-width: 100%; }
+  button { border: 1px solid var(--line); background: var(--card); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  main { max-width: 900px; margin: 0 auto; padding: 14px; display: grid; gap: 12px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .sub { color: var(--sub); font-size: 12px; }
+  .status { font-size: 12px; padding: 2px 8px; border-radius: 99px; background: var(--bg); border: 1px solid var(--line); }
+  .error { color: var(--err); font-size: 13px; }
+  .md h1 { font-size: 18px; } .md h2 { font-size: 15px; margin: 14px 0 4px; border-left: 3px solid var(--accent); padding-left: 8px; }
+  .md h3 { font-size: 14px; margin: 10px 0 4px; } .md ul { margin: 4px 0; padding-left: 20px; } .md p { margin: 4px 0; }
+  .md table { border-collapse: collapse; width: 100%; font-size: 13px; } .md td, .md th { border: 1px solid var(--line); padding: 4px 6px; text-align: left; }
+  .md h2.check { border-color: var(--warn); }
+  .md h2.check + ul { background: var(--warn-bg); border-radius: 6px; padding: 6px 8px 6px 26px; }
+  details { border-top: 1px solid var(--line); padding: 6px 0; } summary { cursor: pointer; color: var(--sub); }
+  .recent { font-size: 12px; color: var(--sub); white-space: pre-wrap; max-height: 9em; overflow: auto; }
+  label.inline { display: flex; gap: 6px; align-items: center; }
+  input.grow { flex: 1; min-width: 120px; }
+  .empty { color: var(--sub); text-align: center; padding: 30px 10px; }
+  body.embed header h1 { display: none; }
+  body.embed main { padding: 10px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>商談メモ</h1>
+  <select id="sessionSel" aria-label="商談を選択"></select>
+  <span id="status" class="status"></span>
+</header>
+<main id="main"><div class="empty">Google Meet で字幕（CC）をオンにすると、ここに商談が表示されます。</div></main>
+
+<script>
+const H = { 'Content-Type': 'application/json', 'X-Meeting-Notes': '1' };
+const $ = (id) => document.getElementById(id);
+if (new URLSearchParams(location.search).has('embed')) document.body.classList.add('embed');
+let current = null;
+let pinned = false;     // 自分で商談を選んだら、自動で切り替えない
+let editing = false;    // 入力中は再描画しない
+let lastRender = '';
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const time = (ts) => ts ? new Date(ts).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) : '';
+
+// 最低限の Markdown 表示（見出し・箇条書き・表・太字）
+function md(src) {
+  const inline = (t) => esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+  const out = []; let list = false; let table = null;
+  const close = () => { if (list) { out.push('</ul>'); list = false; } if (table) { out.push('<table>' + table.join('') + '</table>'); table = null; } };
+  for (const raw of String(src || '').split('\n')) {
+    const line = raw.trimEnd();
+    let m;
+    if (/^\s*\|/.test(line)) {
+      if (list) { out.push('</ul>'); list = false; }
+      if (/^\s*\|[\s|:-]+\|\s*$/.test(line)) continue;
+      table = table || [];
+      const cells = line.trim().replace(/^\||\|$/g, '').split('|').map((c) => `<td>${inline(c.trim())}</td>`);
+      table.push(`<tr>${cells.join('')}</tr>`); continue;
+    }
+    if (table) close();
+    if ((m = line.match(/^(#{1,3})\s+(.*)$/))) {
+      close(); const lv = m[1].length; const cls = lv === 2 && /認識|確認/.test(m[2]) ? ' class="check"' : '';
+      out.push(`<h${lv}${cls}>${inline(m[2])}</h${lv}>`);
+    } else if ((m = line.match(/^\s*[-*・]\s+(.*)$/))) {
+      if (!list) { out.push('<ul>'); list = true; } out.push(`<li>${inline(m[1])}</li>`);
+    } else if (line.trim()) { close(); out.push(`<p>${inline(line)}</p>`); }
+    else close();
+  }
+  close();
+  return out.join('');
+}
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { headers: H, ...opts });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+
+const STATUS = { active: '記録中', finishing: '作成中…', finished: '完了', error: 'エラー' };
+const BUSY = { summary: '要約を作成中…', minutes: '議事録を作成中…', proposal: '提案スライドを作成中…' };
+
+async function refresh() {
+  let list;
+  try { list = await api('/api/sessions'); } catch { $('status').textContent = 'サーバーに接続できません'; return; }
+  const sel = $('sessionSel');
+  if (!pinned && list.length) current = list[0].id;
+  sel.innerHTML = list.map((s) => `<option value="${esc(s.id)}" ${s.id === current ? 'selected' : ''}>${esc(new Date(s.createdAt).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }))} ${esc(s.customer || s.title)}</option>`).join('');
+  if (!current) return;
+  const s = await api('/api/sessions/' + encodeURIComponent(current));
+  $('status').textContent = s.busy ? BUSY[s.busy] : STATUS[s.status];
+  if (editing) return;
+  const key = JSON.stringify([s.status, s.busy, s.summaryCount, s.segmentCount, s.lastError, !!s.minutes, !!s.proposal, s.mode]);
+  if (key === lastRender) { updateCountdown(s); return; }
+  lastRender = key;
+  render(s);
+}
+
+function updateCountdown(s) {
+  const el = $('next');
+  if (!el) return;
+  if (s.nextSummaryAt && s.status === 'active') {
+    const min = Math.max(0, Math.ceil((s.nextSummaryAt - Date.now()) / 60000));
+    el.textContent = s.busy ? '' : `次の自動要約: 約${min}分後（新しい発言があれば）`;
+  } else el.textContent = '';
+}
+
+function render(s) {
+  const latest = [...s.summaries].reverse().find((x) => x.markdown);
+  const older = s.summaries.filter((x) => x.markdown && x !== latest).reverse();
+  const busy = !!s.busy;
+  $('main').innerHTML = `
+    <section class="card">
+      <div class="row">
+        <label class="inline">顧客名 <input id="customer" class="grow" value="${esc(s.customer)}" placeholder="例: 〇〇株式会社"></label>
+        <label class="inline">形式
+          <select id="mode"><option value="online" ${s.mode === 'online' ? 'selected' : ''}>オンライン</option><option value="offline" ${s.mode === 'offline' ? 'selected' : ''}>対面（オフライン）</option></select>
+        </label>
+      </div>
+      <div class="row" style="margin-top:6px"><input id="memo" class="grow" value="${esc(s.memo)}" placeholder="メモ（商談の目的、提案したい商品など。要約・提案に反映されます）"></div>
+      <div class="row" style="margin-top:8px">
+        <button id="btnSummary" ${busy || s.status !== 'active' ? 'disabled' : ''}>今すぐ要約</button>
+        <button id="btnFinish" class="primary" ${busy ? 'disabled' : ''}>${s.minutes ? '議事録と提案を作り直す' : '商談終了 → 議事録・提案スライド作成'}</button>
+        ${s.status !== 'active' ? '<button id="btnReopen">記録を再開</button>' : ''}
+      </div>
+      <div class="sub" style="margin-top:6px">字幕 ${s.segmentCount}件 / 要約 ${s.summaryCount}回 <span id="next"></span></div>
+      ${s.lastError ? `<div class="error">${esc(s.lastError)}</div>` : ''}
+    </section>
+    ${s.proposal ? `<section class="card">
+      <b>提案スライド</b>: <a href="${esc(s.proposal.download)}">${esc(s.proposal.fileName)} をダウンロード</a>
+      <div class="sub">${s.proposal.drivePath ? 'Google ドライブのフォルダにも保存しました: ' + esc(s.proposal.drivePath) : 'Google ドライブにアップロードして「Google スライドで開く」を選んでください。'}</div>
+    </section>` : ''}
+    ${s.minutes ? `<section class="card md"><details open><summary>議事録（${time(s.minutes.createdAt)} 作成）</summary>${md(s.minutes.markdown)}</details></section>` : ''}
+    <section class="card md">
+      ${latest ? `<div class="sub">最新のまとめ #${latest.index}（${time(latest.from)}〜${time(latest.to)}）</div>${md(latest.markdown)}` : '<div class="empty">最初のまとめは、記録開始から約10分後に作成されます。<br>「今すぐ要約」で手動でも作れます。</div>'}
+      ${older.map((x) => `<details><summary>まとめ #${x.index}（${time(x.from)}〜${time(x.to)}）</summary>${md(x.markdown)}</details>`).join('')}
+    </section>
+    <section class="card">
+      <div class="sub">直近の字幕 ・ <a href="/api/sessions/${encodeURIComponent(s.id)}/transcript" target="_blank">全文を見る</a></div>
+      <div class="recent">${(s.recent || []).map((x) => `${esc(x.speaker || '(不明)')}: ${esc(x.text)}`).join('\n')}</div>
+      <div class="sub">保存先: ${esc(s.folder)}</div>
+    </section>`;
+  updateCountdown(s);
+
+  const save = async () => {
+    await api(`/api/sessions/${encodeURIComponent(s.id)}/settings`, { method: 'POST', body: JSON.stringify({ customer: $('customer').value, memo: $('memo').value, mode: $('mode').value }) });
+  };
+  for (const id of ['customer', 'memo']) {
+    $(id).addEventListener('focus', () => (editing = true));
+    $(id).addEventListener('blur', async () => { editing = false; await save(); lastRender = ''; refresh(); });
+  }
+  $('mode').addEventListener('change', async () => { await save(); lastRender = ''; refresh(); });
+  const act = (id, path, confirmMsg) => $(id) && $(id).addEventListener('click', async () => {
+    if (confirmMsg && !confirm(confirmMsg)) return;
+    try { await api(`/api/sessions/${encodeURIComponent(s.id)}/${path}`, { method: 'POST' }); } catch (e) { alert(e.message); }
+    lastRender = ''; refresh();
+  });
+  act('btnSummary', 'summarize');
+  act('btnFinish', 'finish', '議事録と次回の提案スライドを作成します（数分かかります）。よろしいですか？');
+  act('btnReopen', 'reopen');
+}
+
+$('sessionSel').addEventListener('change', (e) => { current = e.target.value; pinned = true; lastRender = ''; refresh(); });
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>
