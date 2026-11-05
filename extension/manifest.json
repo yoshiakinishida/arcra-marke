@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "商談メモ for Google Meet",
+  "name": "会議メモ for Google Meet",
   "version": "0.1.0",
-  "description": "Google Meet の字幕をローカルの商談メモサーバーに送り、定期的に要約します。",
+  "description": "Google Meet の字幕をローカルの会議メモサーバーに送り、定期的に要約します。",
   "permissions": ["sidePanel"],
   "host_permissions": ["http://127.0.0.1:3939/*"],
   "background": { "service_worker": "background.js" },
@@ -14,5 +14,5 @@
     }
   ],
   "side_panel": { "default_path": "sidepanel.html" },
-  "action": { "default_title": "商談メモを開く" }
+  "action": { "default_title": "会議メモを開く" }
 }

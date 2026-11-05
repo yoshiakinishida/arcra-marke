@@ -17,7 +17,8 @@ function formatTranscript(segments) {
 }
 
 class Store {
-  constructor({ dataDir, sessionGapMin }) {
+  constructor({ dataDir, sessionGapMin, defaultType = 'sales' }) {
+    this.defaultType = defaultType;
     this.dir = path.join(dataDir, 'sessions');
     this.gapMs = sessionGapMin * 60 * 1000;
     this.sessions = new Map();
@@ -34,6 +35,7 @@ class Store {
         const s = JSON.parse(fs.readFileSync(f, 'utf8'));
         s.busy = null; // 再起動時に実行中フラグは解除
         if (s.status === 'finishing') s.status = 'error';
+        if (!s.type) s.type = 'sales';
         this.sessions.set(s.id, s);
       } catch (e) {
         console.warn(`読み込み失敗: ${f}: ${e.message}`);
@@ -58,6 +60,8 @@ class Store {
       (s) => s.meetingCode === meetingCode && s.status === 'active' && now - s.lastActivityAt < this.gapMs
     );
     if (candidates.length) return candidates[0];
+    // 定例会議などで同じ会議URLを使い回す場合は、前回の設定を引き継ぐ
+    const previous = this.list().find((s) => s.meetingCode === meetingCode);
     let id = `${stamp(now)}_${meetingCode}`;
     while (this.sessions.has(id)) id += '_';
     const s = {
@@ -65,8 +69,9 @@ class Store {
       meetingCode,
       title: title || meetingCode,
       url: url || '',
-      mode: 'online', // online | offline（対面商談）
-      customer: '',
+      type: previous ? previous.type || 'sales' : this.defaultType, // sales（社外商談） | internal（社内会議）
+      mode: previous ? previous.mode : 'online', // online | offline（対面）
+      customer: previous ? previous.customer : '',
       memo: '',
       createdAt: now,
       lastActivityAt: now,

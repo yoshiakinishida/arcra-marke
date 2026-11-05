@@ -1,4 +1,4 @@
-// Google Meet の字幕（CC）を読み取り、ローカルの商談メモサーバーに送る。
+// Google Meet の字幕（CC）を読み取り、ローカルの会議メモサーバーに送る。
 // Meet の画面構成は予告なく変わるため、読み取り方を複数用意している。
 // 動かなくなったら、下の SELECTORS を Meet の現在の HTML に合わせて直す。
 (() => {
@@ -150,9 +150,9 @@
     let text;
     let color = '#9aa0a6';
     if (override) text = override;
-    else if (serverOk === false) { text = '商談メモ: ローカルサーバーに接続できません'; color = '#f28b82'; }
-    else if (Date.now() - captionsSeenAt > 60000) { text = '商談メモ: 字幕（CC）をオンにすると記録します'; color = '#fdd663'; }
-    else { text = `商談メモ: 記録中（${sentCount}件）`; color = '#81c995'; }
+    else if (serverOk === false) { text = '会議メモ: ローカルサーバーに接続できません'; color = '#f28b82'; }
+    else if (Date.now() - captionsSeenAt > 60000) { text = '会議メモ: 字幕（CC）をオンにすると記録します'; color = '#fdd663'; }
+    else { text = `会議メモ: 記録中（${sentCount}件）`; color = '#81c995'; }
     badge.innerHTML = '';
     const dot = document.createElement('span');
     dot.textContent = '● ';

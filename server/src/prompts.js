@@ -7,18 +7,22 @@ const MAX_TRANSCRIPT_CHARS = 150000;
 const MAX_MATERIALS_CHARS = 60000;
 
 function context(s, config) {
+  const internal = s.type === 'internal';
   const lines = [
+    `- 会議の種類: ${internal ? '社内会議' : '社外の商談'}`,
     `- 会議名: ${s.title}`,
     `- 日付: ${new Date(s.createdAt).toLocaleDateString('ja-JP')}`,
-    `- 顧客名: ${s.customer || '（未入力。文字起こしから判断）'}`,
   ];
+  if (!internal) lines.push(`- 顧客名: ${s.customer || '（未入力。文字起こしから判断）'}`);
   if (config.myCompany) lines.push(`- 自社名: ${config.myCompany}`);
-  if (s.memo) lines.push(`- 担当者メモ: ${s.memo}`);
-  lines.push(
-    s.mode === 'offline'
-      ? '- 形式: 対面商談。1台のPCのマイクで室内の全員の声を拾っているため、字幕の話者名はすべて同じ人物になっています。発言者は文脈から推測し、推測の場合は「（推定）」と書いてください。'
-      : '- 形式: オンライン商談（Google Meet）。話者名は Meet の表示名で、「あなた」「You」は自社側の担当者（このメモの利用者）です。'
-  );
+  if (s.memo) lines.push(`- ${internal ? '会議の目的・議題' : '担当者メモ'}: ${s.memo}`);
+  if (s.mode === 'offline') {
+    lines.push('- 形式: 対面。1台のPCのマイクで室内の全員の声を拾っているため、字幕の話者名はすべて同じ人物になっています。発言者は文脈から推測し、推測の場合は「（推定）」と書いてください。');
+  } else if (internal) {
+    lines.push('- 形式: オンライン会議（Google Meet）。話者名は Meet の表示名で、「あなた」「You」はこのメモの利用者です。');
+  } else {
+    lines.push('- 形式: オンライン商談（Google Meet）。話者名は Meet の表示名で、「あなた」「You」は自社側の担当者（このメモの利用者）です。');
+  }
   return lines.join('\n');
 }
 
@@ -26,25 +30,8 @@ const COMMON_RULES = `- 文字起こしは自動字幕なので誤変換を含�
 - 発言にないことを推測で書かないでください。確信のない固有名詞・金額・日付には「(要確認)」を付けてください。
 - 前置き・後書き・挨拶は書かず、指定の形式だけを出力してください。`;
 
-function summaryPrompt(s, newSegments, prevSummary, config) {
-  const from = newSegments.length ? hhmm(newSegments[0].firstSeen) : '';
-  const to = newSegments.length ? hhmm(newSegments[newSegments.length - 1].lastUpdated) : '';
-  return `あなたは商談に同席している営業アシスタントです。進行中の商談の要点を定期的にまとめ、参加者どうしの認識のずれを防ぐのが役割です。
-
-# 商談情報
-${context(s, config)}
-
-# 前回までのまとめ
-${prevSummary || '（まだありません。これが最初のまとめです）'}
-
-# 今回の区間の文字起こし（${from}〜${to}）
-${formatTranscript(newSegments)}
-
-# 指示
-前回までのまとめと今回の区間をあわせて、次の形式の Markdown を出力してください。「（累積）」の項目は前回までの内容も引き継いで更新してください。
-${COMMON_RULES}
-
-## この区間の要点
+const SUMMARY_FORMAT = {
+  sales: `## この区間の要点
 - （3〜6項目）
 
 ## 合意・決定事項（累積）
@@ -60,7 +47,45 @@ ${COMMON_RULES}
 - 
 
 ## 次に聞いておくべきこと
-- 
+- `,
+  internal: `## この区間の要点
+- （3〜6項目）
+
+## 決定事項（累積）
+- （なければ「なし」）
+
+## 認識合わせが必要な点
+- 担当・期限・範囲・前提があいまいなまま進んだ点を、その場で確認できる「〜ということでよいですか？」の形で書く（なければ「なし」）
+
+## ネクストアクション（累積）
+- [担当] 内容（期限）　※担当や期限が決まっていなければ「担当未定」「期限未定」と書く
+
+## 未決事項・持ち越しの論点（累積）
+- （なければ「なし」）`,
+};
+
+function summaryPrompt(s, newSegments, prevSummary, config) {
+  const internal = s.type === 'internal';
+  const from = newSegments.length ? hhmm(newSegments[0].firstSeen) : '';
+  const to = newSegments.length ? hhmm(newSegments[newSegments.length - 1].lastUpdated) : '';
+  return `${internal
+    ? 'あなたは社内会議に同席している書記です。進行中の会議の要点を定期的にまとめ、参加者どうしの認識のずれや、ネクストアクションの抜け漏れを防ぐのが役割です。'
+    : 'あなたは商談に同席している営業アシスタントです。進行中の商談の要点を定期的にまとめ、参加者どうしの認識のずれを防ぐのが役割です。'}
+
+# 会議情報
+${context(s, config)}
+
+# 前回までのまとめ
+${prevSummary || '（まだありません。これが最初のまとめです）'}
+
+# 今回の区間の文字起こし（${from}〜${to}）
+${formatTranscript(newSegments)}
+
+# 指示
+前回までのまとめと今回の区間をあわせて、次の形式の Markdown を出力してください。「（累積）」の項目は前回までの内容も引き継いで更新してください。
+${COMMON_RULES}
+
+${SUMMARY_FORMAT[internal ? 'internal' : 'sales']}
 `;
 }
 
@@ -79,6 +104,7 @@ function summariesBlock(s) {
 }
 
 function minutesPrompt(s, config) {
+  if (s.type === 'internal') return internalMinutesPrompt(s, config);
   return `あなたは営業担当者の優秀なアシスタントです。終了した商談の議事録を作成してください。
 
 # 商談情報
@@ -118,6 +144,55 @@ ${COMMON_RULES}
 
 ## お客様への確認メール（文案）
 （本日のお礼、合意事項・宿題・確認したい点を簡潔にまとめた、そのまま送れる丁寧なビジネスメール）
+`;
+}
+
+function internalMinutesPrompt(s, config) {
+  return `あなたは社内会議の優秀な書記です。終了した会議の議事録とネクストアクションをまとめてください。
+
+# 会議情報
+${context(s, config)}
+
+# 会議中に作成した途中経過のまとめ
+${summariesBlock(s)}
+
+# 文字起こし全文
+${trimTranscript(s)}
+
+# 指示
+次の形式の Markdown を出力してください。
+${COMMON_RULES}
+- ネクストアクションは抜け漏れがないように、発言の中の「やっておきます」「確認します」「次回までに」なども拾ってください。担当・期限が決まっていないものは「未定」と書き、決めるべきことがわかるようにしてください。
+
+# 議事録: （会議名）
+
+## 基本情報
+- 日時:
+- 参加者:（字幕から分かる範囲）
+- 目的・議題:
+
+## サマリー
+（3行程度）
+
+## 議論内容
+### （議題・話題ごとに見出しを立てる）
+- 
+
+## 決定事項
+- 
+
+## 未決事項・次回への持ち越し
+- 
+
+## 認識合わせが必要な点
+- （担当・期限・範囲などがあいまいなまま終わった点）
+
+## ネクストアクション
+| # | 担当 | 内容 | 期限 | 備考 |
+|---|---|---|---|---|
+
+## 共有用まとめ（チャット貼り付け用）
+（会議に出ていない人にも伝わるように、決定事項とネクストアクションを5〜8行で）
 `;
 }
 

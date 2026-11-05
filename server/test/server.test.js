@@ -91,3 +91,39 @@ test('自社資料がプロンプトに入る', () => {
   const p = proposalPrompt({ title: 't', createdAt: Date.now(), mode: 'online', customer: '' }, '議事録', mats, config);
   assert.match(p, /月額10万円/);
 });
+
+test('社内会議: 議事録とネクストアクションの .md のみ（提案スライドなし）', async () => {
+  let r = await post('/api/segments', {
+    meetingCode: 'int-erna-lmt', title: '週次定例',
+    segments: [{ id: 'i-1', speaker: '佐藤', text: '来週までに見積もりを確認します', firstSeen: Date.now() }],
+  });
+  const { sessionId } = await r.json();
+  r = await post(`/api/sessions/${sessionId}/settings`, { type: 'internal' });
+  assert.strictEqual((await r.json()).type, 'internal');
+  r = await post(`/api/sessions/${sessionId}/finish`);
+  assert.strictEqual(r.status, 202);
+  const s = await waitIdle(sessionId);
+  assert.strictEqual(s.status, 'finished', s.lastError);
+  assert.strictEqual(s.proposal, null);
+  assert.ok(!fs.existsSync(path.join(s.folder, 'proposal.pptx')));
+  assert.ok(s.minutes.drivePath.endsWith('.md') && fs.existsSync(s.minutes.drivePath));
+  assert.match(path.basename(s.minutes.drivePath), /^議事録_週次定例_/);
+  const md = await fetch(base + s.minutes.download);
+  assert.strictEqual(md.status, 200);
+  assert.match(await md.text(), /社内議事録/);
+
+  // 同じ会議URLの次回の会議は、社内会議の設定を引き継ぐ
+  const later = Date.now() + 4 * 60 * 60 * 1000;
+  const { session } = app.store.upsertSegments({ meetingCode: 'int-erna-lmt', segments: [{ id: 'i-2', text: '次回' }] }, later);
+  assert.notStrictEqual(session.id, sessionId);
+  assert.strictEqual(session.type, 'internal');
+});
+
+test('社内会議のプロンプトは社内向けの形式', () => {
+  const { summaryPrompt, minutesPrompt } = require('../src/prompts');
+  const s = { type: 'internal', title: '定例', createdAt: Date.now(), mode: 'online', memo: '', segments: [], summaries: [] };
+  assert.match(summaryPrompt(s, [], '', config), /ネクストアクション（累積）/);
+  assert.doesNotMatch(summaryPrompt(s, [], '', config), /顧客/);
+  assert.match(minutesPrompt(s, config), /\| # \| 担当 \| 内容 \| 期限 \| 備考 \|/);
+  assert.match(summaryPrompt({ ...s, type: 'sales' }, [], '', config), /顧客の課題・ニーズ/);
+});

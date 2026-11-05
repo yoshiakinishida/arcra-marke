@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>商談メモ</title>
+<title>会議メモ</title>
 <style>
   :root {
     --bg: #f6f7f9; --card: #fff; --text: #1d2430; --sub: #667085; --line: #e3e6eb;
@@ -37,7 +37,7 @@
   details { border-top: 1px solid var(--line); padding: 6px 0; } summary { cursor: pointer; color: var(--sub); }
   .recent { font-size: 12px; color: var(--sub); white-space: pre-wrap; max-height: 9em; overflow: auto; }
   label.inline { display: flex; gap: 6px; align-items: center; }
-  input.grow { flex: 1; min-width: 120px; }
+  .grow { flex: 1; min-width: 120px; }
   .empty { color: var(--sub); text-align: center; padding: 30px 10px; }
   body.embed header h1 { display: none; }
   body.embed main { padding: 10px; }
@@ -45,11 +45,11 @@
 </head>
 <body>
 <header>
-  <h1>商談メモ</h1>
-  <select id="sessionSel" aria-label="商談を選択"></select>
+  <h1>会議メモ</h1>
+  <select id="sessionSel" aria-label="会議を選択"></select>
   <span id="status" class="status"></span>
 </header>
-<main id="main"><div class="empty">Google Meet で字幕（CC）をオンにすると、ここに商談が表示されます。</div></main>
+<main id="main"><div class="empty">Google Meet で字幕（CC）をオンにすると、ここに会議が表示されます。</div></main>
 
 <script>
 const H = { 'Content-Type': 'application/json', 'X-Meeting-Notes': '1' };
@@ -106,12 +106,12 @@ async function refresh() {
   try { list = await api('/api/sessions'); } catch { $('status').textContent = 'サーバーに接続できません'; return; }
   const sel = $('sessionSel');
   if (!pinned && list.length) current = list[0].id;
-  sel.innerHTML = list.map((s) => `<option value="${esc(s.id)}" ${s.id === current ? 'selected' : ''}>${esc(new Date(s.createdAt).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }))} ${esc(s.customer || s.title)}</option>`).join('');
+  sel.innerHTML = list.map((s) => `<option value="${esc(s.id)}" ${s.id === current ? 'selected' : ''}>${esc(new Date(s.createdAt).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }))} [${s.type === 'internal' ? '社内' : '商談'}] ${esc(s.type === 'internal' ? s.title : s.customer || s.title)}</option>`).join('');
   if (!current) return;
   const s = await api('/api/sessions/' + encodeURIComponent(current));
   $('status').textContent = s.busy ? BUSY[s.busy] : STATUS[s.status];
   if (editing) return;
-  const key = JSON.stringify([s.status, s.busy, s.summaryCount, s.segmentCount, s.lastError, !!s.minutes, !!s.proposal, s.mode]);
+  const key = JSON.stringify([s.status, s.busy, s.summaryCount, s.segmentCount, s.lastError, !!s.minutes, !!s.proposal, s.mode, s.type]);
   if (key === lastRender) { updateCountdown(s); return; }
   lastRender = key;
   render(s);
@@ -130,18 +130,25 @@ function render(s) {
   const latest = [...s.summaries].reverse().find((x) => x.markdown);
   const older = s.summaries.filter((x) => x.markdown && x !== latest).reverse();
   const busy = !!s.busy;
+  const internal = s.type === 'internal';
+  const finishLabel = s.minutes
+    ? (internal ? '議事録を作り直す' : '議事録と提案を作り直す')
+    : (internal ? '会議終了 → 議事録・ネクストアクション作成' : '商談終了 → 議事録・提案スライド作成');
   $('main').innerHTML = `
     <section class="card">
       <div class="row">
-        <label class="inline">顧客名 <input id="customer" class="grow" value="${esc(s.customer)}" placeholder="例: 〇〇株式会社"></label>
+        <label class="inline">種類
+          <select id="type"><option value="sales" ${!internal ? 'selected' : ''}>社外商談</option><option value="internal" ${internal ? 'selected' : ''}>社内会議</option></select>
+        </label>
         <label class="inline">形式
           <select id="mode"><option value="online" ${s.mode === 'online' ? 'selected' : ''}>オンライン</option><option value="offline" ${s.mode === 'offline' ? 'selected' : ''}>対面（オフライン）</option></select>
         </label>
       </div>
-      <div class="row" style="margin-top:6px"><input id="memo" class="grow" value="${esc(s.memo)}" placeholder="メモ（商談の目的、提案したい商品など。要約・提案に反映されます）"></div>
+      ${internal ? '' : `<div class="row" style="margin-top:6px"><label class="inline grow">顧客名 <input id="customer" class="grow" value="${esc(s.customer)}" placeholder="例: 〇〇株式会社"></label></div>`}
+      <div class="row" style="margin-top:6px"><input id="memo" class="grow" value="${esc(s.memo)}" placeholder="${internal ? 'メモ（会議の目的・議題など。要約・議事録に反映されます）' : 'メモ（商談の目的、提案したい商品など。要約・提案に反映されます）'}"></div>
       <div class="row" style="margin-top:8px">
         <button id="btnSummary" ${busy || s.status !== 'active' ? 'disabled' : ''}>今すぐ要約</button>
-        <button id="btnFinish" class="primary" ${busy ? 'disabled' : ''}>${s.minutes ? '議事録と提案を作り直す' : '商談終了 → 議事録・提案スライド作成'}</button>
+        <button id="btnFinish" class="primary" ${busy ? 'disabled' : ''}>${finishLabel}</button>
         ${s.status !== 'active' ? '<button id="btnReopen">記録を再開</button>' : ''}
       </div>
       <div class="sub" style="margin-top:6px">字幕 ${s.segmentCount}件 / 要約 ${s.summaryCount}回 <span id="next"></span></div>
@@ -150,6 +157,10 @@ function render(s) {
     ${s.proposal ? `<section class="card">
       <b>提案スライド</b>: <a href="${esc(s.proposal.download)}">${esc(s.proposal.fileName)} をダウンロード</a>
       <div class="sub">${s.proposal.drivePath ? 'Google ドライブのフォルダにも保存しました: ' + esc(s.proposal.drivePath) : 'Google ドライブにアップロードして「Google スライドで開く」を選んでください。'}</div>
+    </section>` : ''}
+    ${s.minutes ? `<section class="card">
+      <b>議事録</b>: <a href="${esc(s.minutes.download)}">${esc(s.minutes.fileName || 'minutes.md')} をダウンロード</a>
+      ${s.minutes.drivePath ? `<div class="sub">Google ドライブのフォルダにも保存しました: ${esc(s.minutes.drivePath)}</div>` : ''}
     </section>` : ''}
     ${s.minutes ? `<section class="card md"><details open><summary>議事録（${time(s.minutes.createdAt)} 作成）</summary>${md(s.minutes.markdown)}</details></section>` : ''}
     <section class="card md">
@@ -164,20 +175,21 @@ function render(s) {
   updateCountdown(s);
 
   const save = async () => {
-    await api(`/api/sessions/${encodeURIComponent(s.id)}/settings`, { method: 'POST', body: JSON.stringify({ customer: $('customer').value, memo: $('memo').value, mode: $('mode').value }) });
+    await api(`/api/sessions/${encodeURIComponent(s.id)}/settings`, { method: 'POST', body: JSON.stringify({ ...($('customer') ? { customer: $('customer').value } : {}), memo: $('memo').value, mode: $('mode').value, type: $('type').value }) });
   };
   for (const id of ['customer', 'memo']) {
+    if (!$(id)) continue;
     $(id).addEventListener('focus', () => (editing = true));
     $(id).addEventListener('blur', async () => { editing = false; await save(); lastRender = ''; refresh(); });
   }
-  $('mode').addEventListener('change', async () => { await save(); lastRender = ''; refresh(); });
+  for (const id of ['mode', 'type']) $(id).addEventListener('change', async () => { await save(); lastRender = ''; refresh(); });
   const act = (id, path, confirmMsg) => $(id) && $(id).addEventListener('click', async () => {
     if (confirmMsg && !confirm(confirmMsg)) return;
     try { await api(`/api/sessions/${encodeURIComponent(s.id)}/${path}`, { method: 'POST' }); } catch (e) { alert(e.message); }
     lastRender = ''; refresh();
   });
   act('btnSummary', 'summarize');
-  act('btnFinish', 'finish', '議事録と次回の提案スライドを作成します（数分かかります）。よろしいですか？');
+  act('btnFinish', 'finish', internal ? '議事録とネクストアクションを作成します（1〜2分かかります）。よろしいですか？' : '議事録と次回の提案スライドを作成します（数分かかります）。よろしいですか？');
   act('btnReopen', 'reopen');
 }
 

@@ -43,6 +43,44 @@ function createApp(cfg = config, deps = {}) {
     }
   }
 
+  const safeName = (t) => String(t).replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 60);
+
+  function copyToDrive(s, src, name) {
+    if (!cfg.driveDir) return null;
+    try {
+      fs.mkdirSync(cfg.driveDir, { recursive: true });
+      const dest = path.join(cfg.driveDir, name);
+      fs.copyFileSync(src, dest);
+      return dest;
+    } catch (e) {
+      s.lastError = `Google ドライブのフォルダへのコピーに失敗: ${e.message}`;
+      return null;
+    }
+  }
+
+  async function makeProposal(s, minutes) {
+    s.busy = 'proposal';
+    store.save(s);
+    const materials = prompts.loadMaterials(cfg.materialsDir);
+    let proposal;
+    let raw = await claude({ prompt: prompts.proposalPrompt(s, minutes, materials, cfg), model: cfg.proposalModel });
+    try {
+      proposal = prompts.parseProposal(raw);
+    } catch (e) {
+      store.writeFile(s, 'proposal-raw.txt', raw);
+      raw = await claude({
+        prompt: `次のテキストを、指定どおりの JSON（title, subtitle, slides[{title, lead, bullets, notes}]）だけに整形して出力してください。\n\n${raw}`,
+        model: cfg.summaryModel,
+      });
+      proposal = prompts.parseProposal(raw);
+    }
+    store.writeFile(s, 'proposal.json', JSON.stringify(proposal, null, 2));
+    const fileName = `提案書_${safeName(s.customer || s.title)}_${s.id.slice(0, 8)}.pptx`;
+    const pptxPath = path.join(store.sessionDir(s), 'proposal.pptx');
+    await pptx(proposal, pptxPath);
+    s.proposal = { createdAt: Date.now(), json: proposal, fileName, drivePath: copyToDrive(s, pptxPath, fileName) };
+  }
+
   async function finish(s) {
     if (s.busy) return { skipped: 'busy' };
     if (!s.segments.length) return { error: '字幕がまだ記録されていません' };
@@ -53,39 +91,15 @@ function createApp(cfg = config, deps = {}) {
       store.save(s);
       const minutes = await claude({ prompt: prompts.minutesPrompt(s, cfg), model: cfg.minutesModel });
       s.minutes = { createdAt: Date.now(), markdown: minutes };
+      if (s.type === 'internal') s.proposal = null;
       store.writeFile(s, 'minutes.md', minutes + '\n');
 
-      s.busy = 'proposal';
-      store.save(s);
-      const materials = prompts.loadMaterials(cfg.materialsDir);
-      let proposal;
-      let raw = await claude({ prompt: prompts.proposalPrompt(s, minutes, materials, cfg), model: cfg.proposalModel });
-      try {
-        proposal = prompts.parseProposal(raw);
-      } catch (e) {
-        store.writeFile(s, 'proposal-raw.txt', raw);
-        raw = await claude({
-          prompt: `次のテキストを、指定どおりの JSON（title, subtitle, slides[{title, lead, bullets, notes}]）だけに整形して出力してください。\n\n${raw}`,
-          model: cfg.summaryModel,
-        });
-        proposal = prompts.parseProposal(raw);
-      }
-      store.writeFile(s, 'proposal.json', JSON.stringify(proposal, null, 2));
-      const fileBase = `提案書_${(s.customer || s.title).replace(/[\\/:*?"<>|\s]+/g, '_')}_${s.id.slice(0, 8)}.pptx`;
-      const pptxPath = path.join(store.sessionDir(s), 'proposal.pptx');
-      await pptx(proposal, pptxPath);
-      let drivePath = null;
-      if (cfg.driveDir) {
-        try {
-          fs.mkdirSync(cfg.driveDir, { recursive: true });
-          drivePath = path.join(cfg.driveDir, fileBase);
-          fs.copyFileSync(pptxPath, drivePath);
-        } catch (e) {
-          s.lastError = `Google ドライブのフォルダへのコピーに失敗: ${e.message}`;
-          drivePath = null;
-        }
-      }
-      s.proposal = { createdAt: Date.now(), json: proposal, fileName: fileBase, drivePath };
+      const minutesName = `${s.type === 'internal' ? '議事録' : '商談議事録'}_${safeName(s.type === 'internal' ? s.title : s.customer || s.title)}_${s.id.slice(0, 8)}.md`;
+      s.minutes.fileName = minutesName;
+      s.minutes.drivePath = copyToDrive(s, path.join(store.sessionDir(s), 'minutes.md'), minutesName);
+
+      // 社内会議は議事録とネクストアクションまで。提案スライドは社外商談のみ
+      if (s.type !== 'internal') await makeProposal(s, minutes);
       s.status = 'finished';
       return { ok: true };
     } catch (e) {
@@ -114,7 +128,7 @@ function createApp(cfg = config, deps = {}) {
 
   function view(s, full) {
     const base = {
-      id: s.id, title: s.title, meetingCode: s.meetingCode, mode: s.mode, customer: s.customer, memo: s.memo,
+      id: s.id, title: s.title, meetingCode: s.meetingCode, type: s.type, mode: s.mode, customer: s.customer, memo: s.memo,
       status: s.status, busy: s.busy, lastError: s.lastError, createdAt: s.createdAt, lastActivityAt: s.lastActivityAt,
       segmentCount: s.segments.length, summaryCount: s.summaries.length,
       nextSummaryAt: s.status === 'active' ? (s.lastSummaryAt || s.createdAt) + intervalMs : null,
@@ -123,7 +137,7 @@ function createApp(cfg = config, deps = {}) {
     return {
       ...base,
       summaries: s.summaries,
-      minutes: s.minutes,
+      minutes: s.minutes && { ...s.minutes, download: `/api/sessions/${encodeURIComponent(s.id)}/minutes.md` },
       proposal: s.proposal && { ...s.proposal, download: `/api/sessions/${encodeURIComponent(s.id)}/proposal.pptx` },
       recent: s.segments.slice(-8),
       folder: store.sessionDir(s),
@@ -182,6 +196,15 @@ function createApp(cfg = config, deps = {}) {
     if (req.method === 'GET' && action === 'transcript') {
       return send(res, 200, fs.readFileSync(path.join(store.sessionDir(s), 'transcript.md')), 'text/plain; charset=utf-8');
     }
+    if (req.method === 'GET' && action === 'minutes.md') {
+      const f = path.join(store.sessionDir(s), 'minutes.md');
+      if (!fs.existsSync(f)) return send(res, 404, { error: 'not yet' });
+      res.writeHead(200, {
+        'Content-Type': 'text/markdown; charset=utf-8',
+        'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(s.minutes && s.minutes.fileName ? s.minutes.fileName : 'minutes.md')}`,
+      });
+      return fs.createReadStream(f).pipe(res);
+    }
     if (req.method === 'GET' && action === 'proposal.pptx') {
       const f = path.join(store.sessionDir(s), 'proposal.pptx');
       if (!fs.existsSync(f)) return send(res, 404, { error: 'not yet' });
@@ -194,6 +217,7 @@ function createApp(cfg = config, deps = {}) {
     if (req.method === 'POST' && action === 'settings') {
       const body = await readJson(req);
       if (['online', 'offline'].includes(body.mode)) s.mode = body.mode;
+      if (['sales', 'internal'].includes(body.type)) s.type = body.type;
       if (typeof body.customer === 'string') s.customer = body.customer.slice(0, 200);
       if (typeof body.memo === 'string') s.memo = body.memo.slice(0, 2000);
       store.save(s);
@@ -243,9 +267,9 @@ if (require.main === module) {
   const app = createApp();
   checkClaude();
   app.server.listen(config.port, config.host, () => {
-    console.log(`商談メモサーバー起動: http://${config.host}:${config.port}/`);
-    console.log(`要約の間隔: ${config.intervalMin}分 / 保存先: ${config.dataDir}`);
-    if (config.driveDir) console.log(`提案スライドのコピー先: ${config.driveDir}`);
+    console.log(`会議メモサーバー起動: http://${config.host}:${config.port}/`);
+    console.log(`要約の間隔: ${config.intervalMin}分 / 新しい会議の種類: ${config.defaultType === 'internal' ? '社内会議' : '社外商談'} / 保存先: ${config.dataDir}`);
+    if (config.driveDir) console.log(`議事録・提案スライドのコピー先: ${config.driveDir}`);
   });
   setInterval(() => app.tick(), 20 * 1000);
   const bye = () => { app.store.flushAll(); process.exit(0); };

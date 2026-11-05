@@ -13,6 +13,8 @@ process.stdin.on('end', () => {
         { title: '課題', lead: '属人化', bullets: ['a', 'b'], notes: '' },
       ],
     }) + '\n```');
+  } else if (input.includes('社内会議の優秀な書記')) {
+    console.log('# 社内議事録: 週次定例\n## ネクストアクション\n| # | 担当 | 内容 | 期限 | 備考 |');
   } else if (input.includes('議事録を作成')) {
     console.log('# 議事録: テスト\n## 合意・決定事項\n- 次回は来週');
   } else {

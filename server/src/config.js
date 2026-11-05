@@ -36,6 +36,8 @@ module.exports = {
   // Google ドライブ for デスクトップの同期フォルダ（設定すると提案スライドをここにもコピー）
   driveDir: expandHome(process.env.DRIVE_DIR) || '',
   myCompany: process.env.MY_COMPANY || '',
+  // 新しい会議の種類の初期値（sales: 社外商談 / internal: 社内会議）
+  defaultType: process.env.DEFAULT_MEETING_TYPE === 'internal' ? 'internal' : 'sales',
   // 最後の字幕からこの時間が経つと、同じ会議コードでも別の商談として扱う
   sessionGapMin: Number(process.env.SESSION_GAP_MIN) || 180,
 };
