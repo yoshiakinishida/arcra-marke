@@ -98,6 +98,29 @@ async function api(path, opts = {}) {
   return j;
 }
 
+// 会議の種類ごとの表示
+const TYPES = {
+  sales: {
+    label: '社外商談', short: '商談', party: '顧客名', partyPh: '例: 〇〇株式会社',
+    memoPh: 'メモ（商談の目的、提案したい商品など。要約・提案に反映されます）',
+    finish: '商談終了 → 議事録・提案スライド作成', redo: '議事録と提案を作り直す',
+    confirm: '議事録と次回の提案スライドを作成します（数分かかります）。よろしいですか？',
+  },
+  consult: {
+    label: '社外打ち合わせ', short: '打合せ', party: '相手先', partyPh: '例: 〇〇特許事務所 〇〇様',
+    memoPh: '目的・聞きたいこと（例: 費用感／自動化の可否／広報上の注意）。「まだ聞けていないこと」の判定に使います',
+    finish: '打ち合わせ終了 → 打ち合わせメモ作成', redo: '打ち合わせメモを作り直す',
+    confirm: '打ち合わせメモ（結論・回答・社内検討事項・ネクストアクション）を作成します（1〜2分かかります）。よろしいですか？',
+  },
+  internal: {
+    label: '社内会議', short: '社内', party: null, partyPh: '',
+    memoPh: 'メモ（会議の目的・議題など。要約・議事録に反映されます）',
+    finish: '会議終了 → 議事録・ネクストアクション作成', redo: '議事録を作り直す',
+    confirm: '議事録とネクストアクションを作成します（1〜2分かかります）。よろしいですか？',
+  },
+};
+const typeOf = (s) => TYPES[s.type] || TYPES.sales;
+
 const STATUS = { active: '記録中', finishing: '作成中…', finished: '完了', error: 'エラー' };
 const BUSY = { summary: '要約を作成中…', minutes: '議事録を作成中…', proposal: '提案スライドを作成中…' };
 
@@ -106,7 +129,7 @@ async function refresh() {
   try { list = await api('/api/sessions'); } catch { $('status').textContent = 'サーバーに接続できません'; return; }
   const sel = $('sessionSel');
   if (!pinned && list.length) current = list[0].id;
-  sel.innerHTML = list.map((s) => `<option value="${esc(s.id)}" ${s.id === current ? 'selected' : ''}>${esc(new Date(s.createdAt).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }))} [${s.type === 'internal' ? '社内' : '商談'}] ${esc(s.type === 'internal' ? s.title : s.customer || s.title)}</option>`).join('');
+  sel.innerHTML = list.map((s) => `<option value="${esc(s.id)}" ${s.id === current ? 'selected' : ''}>${esc(new Date(s.createdAt).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }))} [${typeOf(s).short}] ${esc(s.type === 'internal' ? s.title : s.customer || s.title)}</option>`).join('');
   if (!current) return;
   const s = await api('/api/sessions/' + encodeURIComponent(current));
   $('status').textContent = s.busy ? BUSY[s.busy] : STATUS[s.status];
@@ -130,22 +153,20 @@ function render(s) {
   const latest = [...s.summaries].reverse().find((x) => x.markdown);
   const older = s.summaries.filter((x) => x.markdown && x !== latest).reverse();
   const busy = !!s.busy;
-  const internal = s.type === 'internal';
-  const finishLabel = s.minutes
-    ? (internal ? '議事録を作り直す' : '議事録と提案を作り直す')
-    : (internal ? '会議終了 → 議事録・ネクストアクション作成' : '商談終了 → 議事録・提案スライド作成');
+  const T = typeOf(s);
+  const finishLabel = s.minutes ? T.redo : T.finish;
   $('main').innerHTML = `
     <section class="card">
       <div class="row">
         <label class="inline">種類
-          <select id="type"><option value="sales" ${!internal ? 'selected' : ''}>社外商談</option><option value="internal" ${internal ? 'selected' : ''}>社内会議</option></select>
+          <select id="type">${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${T === v ? 'selected' : ''}>${v.label}</option>`).join('')}</select>
         </label>
         <label class="inline">形式
           <select id="mode"><option value="online" ${s.mode === 'online' ? 'selected' : ''}>オンライン</option><option value="offline" ${s.mode === 'offline' ? 'selected' : ''}>対面（オフライン）</option></select>
         </label>
       </div>
-      ${internal ? '' : `<div class="row" style="margin-top:6px"><label class="inline grow">顧客名 <input id="customer" class="grow" value="${esc(s.customer)}" placeholder="例: 〇〇株式会社"></label></div>`}
-      <div class="row" style="margin-top:6px"><input id="memo" class="grow" value="${esc(s.memo)}" placeholder="${internal ? 'メモ（会議の目的・議題など。要約・議事録に反映されます）' : 'メモ（商談の目的、提案したい商品など。要約・提案に反映されます）'}"></div>
+      ${T.party ? `<div class="row" style="margin-top:6px"><label class="inline grow">${T.party} <input id="customer" class="grow" value="${esc(s.customer)}" placeholder="${esc(T.partyPh)}"></label></div>` : ''}
+      <div class="row" style="margin-top:6px"><input id="memo" class="grow" value="${esc(s.memo)}" placeholder="${esc(T.memoPh)}"></div>
       <div class="row" style="margin-top:8px">
         <button id="btnSummary" ${busy || s.status !== 'active' ? 'disabled' : ''}>今すぐ要約</button>
         <button id="btnFinish" class="primary" ${busy ? 'disabled' : ''}>${finishLabel}</button>
@@ -159,10 +180,10 @@ function render(s) {
       <div class="sub">${s.proposal.drivePath ? 'Google ドライブのフォルダにも保存しました: ' + esc(s.proposal.drivePath) : 'Google ドライブにアップロードして「Google スライドで開く」を選んでください。'}</div>
     </section>` : ''}
     ${s.minutes ? `<section class="card">
-      <b>議事録</b>: <a href="${esc(s.minutes.download)}">${esc(s.minutes.fileName || 'minutes.md')} をダウンロード</a>
+      <b>${s.type === 'consult' ? '打ち合わせメモ' : '議事録'}</b>: <a href="${esc(s.minutes.download)}">${esc(s.minutes.fileName || 'minutes.md')} をダウンロード</a>
       ${s.minutes.drivePath ? `<div class="sub">Google ドライブのフォルダにも保存しました: ${esc(s.minutes.drivePath)}</div>` : ''}
     </section>` : ''}
-    ${s.minutes ? `<section class="card md"><details open><summary>議事録（${time(s.minutes.createdAt)} 作成）</summary>${md(s.minutes.markdown)}</details></section>` : ''}
+    ${s.minutes ? `<section class="card md"><details open><summary>${s.type === 'consult' ? '打ち合わせメモ' : '議事録'}（${time(s.minutes.createdAt)} 作成）</summary>${md(s.minutes.markdown)}</details></section>` : ''}
     <section class="card md">
       ${latest ? `<div class="sub">最新のまとめ #${latest.index}（${time(latest.from)}〜${time(latest.to)}）</div>${md(latest.markdown)}` : '<div class="empty">最初のまとめは、記録開始から約10分後に作成されます。<br>「今すぐ要約」で手動でも作れます。</div>'}
       ${older.map((x) => `<details><summary>まとめ #${x.index}（${time(x.from)}〜${time(x.to)}）</summary>${md(x.markdown)}</details>`).join('')}
@@ -189,7 +210,7 @@ function render(s) {
     lastRender = ''; refresh();
   });
   act('btnSummary', 'summarize');
-  act('btnFinish', 'finish', internal ? '議事録とネクストアクションを作成します（1〜2分かかります）。よろしいですか？' : '議事録と次回の提案スライドを作成します（数分かかります）。よろしいですか？');
+  act('btnFinish', 'finish', T.confirm);
   act('btnReopen', 'reopen');
 }
 

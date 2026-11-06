@@ -13,6 +13,8 @@ process.stdin.on('end', () => {
         { title: '課題', lead: '属人化', bullets: ['a', 'b'], notes: '' },
       ],
     }) + '\n```');
+  } else if (input.includes('打ち合わせのメモを作成')) {
+    console.log('# 打ち合わせメモ: 特許相談\n## 1. 結論（3行）\n- 出願は約50万円');
   } else if (input.includes('社内会議の優秀な書記')) {
     console.log('# 社内議事録: 週次定例\n## ネクストアクション\n| # | 担当 | 内容 | 期限 | 備考 |');
   } else if (input.includes('議事録を作成')) {

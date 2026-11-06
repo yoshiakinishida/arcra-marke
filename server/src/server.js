@@ -91,15 +91,16 @@ function createApp(cfg = config, deps = {}) {
       store.save(s);
       const minutes = await claude({ prompt: prompts.minutesPrompt(s, cfg), model: cfg.minutesModel });
       s.minutes = { createdAt: Date.now(), markdown: minutes };
-      if (s.type === 'internal') s.proposal = null;
+      if (s.type !== 'sales') s.proposal = null;
       store.writeFile(s, 'minutes.md', minutes + '\n');
 
-      const minutesName = `${s.type === 'internal' ? '議事録' : '商談議事録'}_${safeName(s.type === 'internal' ? s.title : s.customer || s.title)}_${s.id.slice(0, 8)}.md`;
+      const prefix = { sales: '商談議事録', internal: '議事録', consult: '打ち合わせメモ' }[s.type] || '議事録';
+      const minutesName = `${prefix}_${safeName(s.type === 'internal' ? s.title : s.customer || s.title)}_${s.id.slice(0, 8)}.md`;
       s.minutes.fileName = minutesName;
       s.minutes.drivePath = copyToDrive(s, path.join(store.sessionDir(s), 'minutes.md'), minutesName);
 
-      // 社内会議は議事録とネクストアクションまで。提案スライドは社外商談のみ
-      if (s.type !== 'internal') await makeProposal(s, minutes);
+      // 提案スライドは社外商談のみ。社内会議・社外打ち合わせは .md まで
+      if (s.type === 'sales') await makeProposal(s, minutes);
       s.status = 'finished';
       return { ok: true };
     } catch (e) {
@@ -217,7 +218,7 @@ function createApp(cfg = config, deps = {}) {
     if (req.method === 'POST' && action === 'settings') {
       const body = await readJson(req);
       if (['online', 'offline'].includes(body.mode)) s.mode = body.mode;
-      if (['sales', 'internal'].includes(body.type)) s.type = body.type;
+      if (['sales', 'internal', 'consult'].includes(body.type)) s.type = body.type;
       if (typeof body.customer === 'string') s.customer = body.customer.slice(0, 200);
       if (typeof body.memo === 'string') s.memo = body.memo.slice(0, 2000);
       store.save(s);
@@ -268,7 +269,7 @@ if (require.main === module) {
   checkClaude();
   app.server.listen(config.port, config.host, () => {
     console.log(`会議メモサーバー起動: http://${config.host}:${config.port}/`);
-    console.log(`要約の間隔: ${config.intervalMin}分 / 新しい会議の種類: ${config.defaultType === 'internal' ? '社内会議' : '社外商談'} / 保存先: ${config.dataDir}`);
+    console.log(`要約の間隔: ${config.intervalMin}分 / 新しい会議の種類: ${{ sales: '社外商談', internal: '社内会議', consult: '社外打ち合わせ' }[config.defaultType]} / 保存先: ${config.dataDir}`);
     if (config.driveDir) console.log(`議事録・提案スライドのコピー先: ${config.driveDir}`);
   });
   setInterval(() => app.tick(), 20 * 1000);

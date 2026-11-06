@@ -6,20 +6,28 @@ const { formatTranscript, hhmm } = require('./store');
 const MAX_TRANSCRIPT_CHARS = 150000;
 const MAX_MATERIALS_CHARS = 60000;
 
+const TYPE_LABEL = { sales: '社外の商談', internal: '社内会議', consult: '社外の専門家・取引先との打ち合わせ（相談・ヒアリング）' };
+
 function context(s, config) {
-  const internal = s.type === 'internal';
+  const type = TYPE_LABEL[s.type] ? s.type : 'sales';
   const lines = [
-    `- 会議の種類: ${internal ? '社内会議' : '社外の商談'}`,
+    `- 会議の種類: ${TYPE_LABEL[type]}`,
     `- 会議名: ${s.title}`,
     `- 日付: ${new Date(s.createdAt).toLocaleDateString('ja-JP')}`,
   ];
-  if (!internal) lines.push(`- 顧客名: ${s.customer || '（未入力。文字起こしから判断）'}`);
+  if (type === 'sales') lines.push(`- 顧客名: ${s.customer || '（未入力。文字起こしから判断）'}`);
+  if (type === 'consult') lines.push(`- 相手先: ${s.customer || '（未入力。文字起こしから判断）'}`);
   if (config.myCompany) lines.push(`- 自社名: ${config.myCompany}`);
-  if (s.memo) lines.push(`- ${internal ? '会議の目的・議題' : '担当者メモ'}: ${s.memo}`);
+  if (s.memo) {
+    const label = { sales: '担当者メモ', internal: '会議の目的・議題', consult: '打ち合わせの目的・聞きたいこと' }[type];
+    lines.push(`- ${label}: ${s.memo}`);
+  }
   if (s.mode === 'offline') {
     lines.push('- 形式: 対面。1台のPCのマイクで室内の全員の声を拾っているため、字幕の話者名はすべて同じ人物になっています。発言者は文脈から推測し、推測の場合は「（推定）」と書いてください。');
-  } else if (internal) {
+  } else if (type === 'internal') {
     lines.push('- 形式: オンライン会議（Google Meet）。話者名は Meet の表示名で、「あなた」「You」はこのメモの利用者です。');
+  } else if (type === 'consult') {
+    lines.push('- 形式: オンライン打ち合わせ（Google Meet）。話者名は Meet の表示名で、「あなた」「You」は自社側（このメモの利用者）、それ以外は主に相手先です。');
   } else {
     lines.push('- 形式: オンライン商談（Google Meet）。話者名は Meet の表示名で、「あなた」「You」は自社側の担当者（このメモの利用者）です。');
   }
@@ -62,15 +70,35 @@ const SUMMARY_FORMAT = {
 
 ## 未決事項・持ち越しの論点（累積）
 - （なければ「なし」）`,
+  consult: `## この区間の要点
+- （3〜6項目）
+
+## 確認できたこと（累積）
+- Q: こちらの質問・相談 → A: 相手先の回答（要点）
+
+## 数字・条件（累積）
+| 項目 | 目安・条件 | 備考 |
+|---|---|---|
+（金額・期間・件数・料金体系など。なければ「なし」とだけ書く）
+
+## まだ聞けていないこと
+- 打ち合わせの目的・聞きたいことのうち、まだ回答が得られていないもの。回答があいまいなものは「〜という理解でよいですか？」の確認質問の形で（なければ「なし」）
+
+## 助言・注意点（累積）
+- 相手先からの助言、やってよいこと・避けるべきこと`,
+};
+
+const ROLE = {
+  sales: 'あなたは商談に同席している営業アシスタントです。進行中の商談の要点を定期的にまとめ、参加者どうしの認識のずれを防ぐのが役割です。',
+  internal: 'あなたは社内会議に同席している書記です。進行中の会議の要点を定期的にまとめ、参加者どうしの認識のずれや、ネクストアクションの抜け漏れを防ぐのが役割です。',
+  consult: 'あなたは社外の専門家・取引先との打ち合わせに同席している書記です。進行中の打ち合わせで確認できたことを定期的にまとめ、聞き漏れと認識のずれを防ぐのが役割です。',
 };
 
 function summaryPrompt(s, newSegments, prevSummary, config) {
-  const internal = s.type === 'internal';
+  const type = ROLE[s.type] ? s.type : 'sales';
   const from = newSegments.length ? hhmm(newSegments[0].firstSeen) : '';
   const to = newSegments.length ? hhmm(newSegments[newSegments.length - 1].lastUpdated) : '';
-  return `${internal
-    ? 'あなたは社内会議に同席している書記です。進行中の会議の要点を定期的にまとめ、参加者どうしの認識のずれや、ネクストアクションの抜け漏れを防ぐのが役割です。'
-    : 'あなたは商談に同席している営業アシスタントです。進行中の商談の要点を定期的にまとめ、参加者どうしの認識のずれを防ぐのが役割です。'}
+  return `${ROLE[type]}
 
 # 会議情報
 ${context(s, config)}
@@ -85,7 +113,7 @@ ${formatTranscript(newSegments)}
 前回までのまとめと今回の区間をあわせて、次の形式の Markdown を出力してください。「（累積）」の項目は前回までの内容も引き継いで更新してください。
 ${COMMON_RULES}
 
-${SUMMARY_FORMAT[internal ? 'internal' : 'sales']}
+${SUMMARY_FORMAT[type]}
 `;
 }
 
@@ -105,6 +133,7 @@ function summariesBlock(s) {
 
 function minutesPrompt(s, config) {
   if (s.type === 'internal') return internalMinutesPrompt(s, config);
+  if (s.type === 'consult') return consultMinutesPrompt(s, config);
   return `あなたは営業担当者の優秀なアシスタントです。終了した商談の議事録を作成してください。
 
 # 商談情報
@@ -193,6 +222,73 @@ ${COMMON_RULES}
 
 ## 共有用まとめ（チャット貼り付け用）
 （会議に出ていない人にも伝わるように、決定事項とネクストアクションを5〜8行で）
+`;
+}
+
+function consultMinutesPrompt(s, config) {
+  return `あなたは社外の専門家・取引先との打ち合わせに同席した、優秀な書記兼アシスタントです。終了した打ち合わせのメモを作成してください。
+
+# 会議情報
+${context(s, config)}
+
+# 会議中に作成した途中経過のまとめ
+${summariesBlock(s)}
+
+# 文字起こし全文
+${trimTranscript(s)}
+
+# 指示
+次の形式の Markdown を出力してください。
+- 文字起こしは自動字幕なので誤変換を含みます。金額などは文脈から補正してください。
+- 「補足（AIによる検討）」より前の部分には、打ち合わせで実際に話された内容だけを書いてください。確信のない固有名詞・金額・日付には「(要確認)」を付けてください。
+- 「補足（AIによる検討）」には、打ち合わせの内容を踏まえて自社が判断するときに役立つ観点・リスク・選択肢を書いて構いません。一般論や推測は「（一般論・要確認）」と明記し、打ち合わせでの相手先の発言を根拠にする場合は「（打ち合わせでの指摘）」と書き分けてください。
+- 見出しは内容に合わせて調整して構いませんが、「結論」「社内で検討すること」「ネクストアクション」は必ず入れてください。
+- 前置き・後書き・挨拶は書かず、指定の形式だけを出力してください。
+
+# 打ち合わせメモ: （会議名）
+
+- 日時:
+- 参加者:（相手先の氏名・肩書きと自社側。字幕から分かる範囲）
+- 目的:
+- 注記: 文字起こしは自動生成のため誤変換あり。「要確認」は再確認が必要な箇所
+
+## 1. 結論（3行）
+- 
+
+## 2. 確認事項ごとの回答
+（打ち合わせの目的・質問ごとに見出しを立てる。こちらの質問・相談の内容と、相手先の回答を分けて書く。金額・期間・条件などの数字は表にまとめる）
+
+### （確認事項）
+**こちらの相談内容**
+- 
+**相手先の回答**
+- 
+
+| 項目 | 目安 | 備考 |
+|---|---|---|
+
+## 3. 助言・注意点
+（相手先からの助言。やってよいこと・避けるべきことがあれば表にする）
+
+| 区分 | 内容 | 理由 |
+|---|---|---|
+| OK / NG | | |
+
+## 4. まだ確認できていないこと
+- （聞けなかったこと、回答があいまいで再確認が必要なこと）
+
+## 5. 社内で検討すること
+- [ ] 
+
+## 6. ネクストアクション
+| # | 担当 | 内容 | 期限 | 備考 |
+|---|---|---|---|---|
+
+## 7. 補足（AIによる検討）
+（社内で判断するための観点、リスク、選択肢。検討の方向性は「- [ ]」で）
+
+## 共有用まとめ（チャット貼り付け用）
+（打ち合わせに出ていない人にも伝わるように、結論・数字・ネクストアクションを5〜8行で）
 `;
 }
 

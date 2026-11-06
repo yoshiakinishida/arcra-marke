@@ -127,3 +127,36 @@ test('社内会議のプロンプトは社内向けの形式', () => {
   assert.match(minutesPrompt(s, config), /\| # \| 担当 \| 内容 \| 期限 \| 備考 \|/);
   assert.match(summaryPrompt({ ...s, type: 'sales' }, [], '', config), /顧客の課題・ニーズ/);
 });
+
+test('社外打ち合わせ: 打ち合わせメモ .md のみ（提案スライドなし）', async () => {
+  let r = await post('/api/segments', {
+    meetingCode: 'con-sult-abc', title: '特許相談',
+    segments: [{ id: 'c-1', speaker: '足立', text: '出願費用はおおよそ50万円です', firstSeen: Date.now() }],
+  });
+  const { sessionId } = await r.json();
+  await post(`/api/sessions/${sessionId}/settings`, { type: 'consult', customer: '〇〇特許事務所', memo: '費用感／広報上の注意' });
+  r = await post(`/api/sessions/${sessionId}/finish`);
+  assert.strictEqual(r.status, 202);
+  const s = await waitIdle(sessionId);
+  assert.strictEqual(s.status, 'finished', s.lastError);
+  assert.strictEqual(s.type, 'consult');
+  assert.strictEqual(s.proposal, null);
+  assert.ok(!fs.existsSync(path.join(s.folder, 'proposal.pptx')));
+  assert.match(path.basename(s.minutes.drivePath), /^打ち合わせメモ_〇〇特許事務所_/);
+  assert.match(fs.readFileSync(s.minutes.drivePath, 'utf8'), /打ち合わせメモ/);
+});
+
+test('社外打ち合わせのプロンプト', () => {
+  const { summaryPrompt, minutesPrompt } = require('../src/prompts');
+  const s = { type: 'consult', title: '特許相談', customer: '〇〇特許事務所', createdAt: Date.now(), mode: 'online', memo: '費用感／広報上の注意', segments: [], summaries: [] };
+  const sp = summaryPrompt(s, [], '', config);
+  assert.match(sp, /相手先: 〇〇特許事務所/);
+  assert.match(sp, /打ち合わせの目的・聞きたいこと: 費用感／広報上の注意/);
+  assert.match(sp, /## まだ聞けていないこと/);
+  assert.doesNotMatch(sp, /顧客/);
+  const mp = minutesPrompt(s, config);
+  for (const h of ['## 1. 結論（3行）', '## 2. 確認事項ごとの回答', '## 3. 助言・注意点', '## 5. 社内で検討すること', '## 6. ネクストアクション', '## 7. 補足（AIによる検討）']) {
+    assert.ok(mp.includes(h), h);
+  }
+  assert.match(mp, /（一般論・要確認）/);
+});

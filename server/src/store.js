@@ -69,7 +69,7 @@ class Store {
       meetingCode,
       title: title || meetingCode,
       url: url || '',
-      type: previous ? previous.type || 'sales' : this.defaultType, // sales（社外商談） | internal（社内会議）
+      type: previous ? previous.type || 'sales' : this.defaultType, // sales（社外商談） | internal（社内会議） | consult（社外打ち合わせ）
       mode: previous ? previous.mode : 'online', // online | offline（対面）
       customer: previous ? previous.customer : '',
       memo: '',
